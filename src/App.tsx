@@ -38,14 +38,67 @@ const RENDERER_OPTIONS: Record<
 };
 
 function formatProbeDetails(context: WebGLRenderingContext | WebGL2RenderingContext) {
+  const safeGetParameter = (parameter: number) => {
+    try {
+      return context.getParameter(parameter);
+    } catch (error) {
+      return `threw:${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+
+  const safeIsContextLost = () => {
+    try {
+      return String(context.isContextLost());
+    } catch (error) {
+      return `threw:${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+
   const parts = [
-    `version=${context.getParameter(context.VERSION)}`,
-    `renderer=${context.getParameter(context.RENDERER)}`,
-    `vendor=${context.getParameter(context.VENDOR)}`,
+    `version=${String(safeGetParameter(context.VERSION))}`,
+    `renderer=${String(safeGetParameter(context.RENDERER))}`,
+    `vendor=${String(safeGetParameter(context.VENDOR))}`,
   ];
 
   if ("isContextLost" in context) {
-    parts.push(`lost=${String(context.isContextLost())}`);
+    parts.push(`lost=${safeIsContextLost()}`);
+  }
+
+  return parts.join(" | ");
+}
+
+function exerciseContext(context: WebGLRenderingContext | WebGL2RenderingContext) {
+  const parts: string[] = [];
+
+  try {
+    context.viewport(0, 0, 1, 1);
+    context.clearColor(0.25, 0.5, 0.75, 1);
+    context.clear(context.COLOR_BUFFER_BIT);
+    parts.push(`clearError=${String(context.getError())}`);
+  } catch (error) {
+    parts.push(
+      `clearThrew=${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  try {
+    parts.push(`postClearLost=${String(context.isContextLost())}`);
+  } catch (error) {
+    parts.push(
+      `postClearLost=threw:${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  try {
+    const vertexShader = context.createShader(context.VERTEX_SHADER);
+    parts.push(`createShader=${vertexShader ? "ok" : "null"}`);
+    if (vertexShader) {
+      context.deleteShader(vertexShader);
+    }
+  } catch (error) {
+    parts.push(
+      `createShaderThrew=${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   return parts.join(" | ");
@@ -70,6 +123,7 @@ function App() {
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [probeResults, setProbeResults] = useState<ProbeResult[]>([]);
+  const [freshProbeResults, setFreshProbeResults] = useState<ProbeResult[]>([]);
   const [activeMode, setActiveMode] = useState<RendererMode>("default");
 
   const pushLog = (level: LogLevel, message: string) => {
@@ -101,6 +155,7 @@ function App() {
     setActiveMode(mode);
     setLogs([]);
     setProbeResults([]);
+    setFreshProbeResults([]);
     logIdRef.current = 0;
 
     pushLog("info", `starting diagnostics with ${mode} renderer settings`);
@@ -148,6 +203,42 @@ function App() {
     }
 
     setProbeResults(nextProbeResults);
+
+    const nextFreshProbeResults: ProbeResult[] = [];
+
+    for (const contextName of rawProbeNames) {
+      try {
+        const freshCanvas = document.createElement("canvas");
+        const context = getWebGLContext(freshCanvas, contextName);
+
+        if (context) {
+          nextFreshProbeResults.push({
+            name: contextName,
+            success: true,
+            details: `${formatProbeDetails(context)} | ${exerciseContext(context)}`,
+          });
+          pushLog("info", `${contextName} fresh-canvas probe succeeded`);
+        } else {
+          nextFreshProbeResults.push({
+            name: contextName,
+            success: false,
+            details: "getContext returned null on a fresh canvas",
+          });
+          pushLog("warn", `${contextName} fresh-canvas probe returned null`);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        nextFreshProbeResults.push({
+          name: contextName,
+          success: false,
+          details: message,
+        });
+        pushLog("error", `${contextName} fresh-canvas probe threw: ${message}`);
+      }
+    }
+
+    setFreshProbeResults(nextFreshProbeResults);
 
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -294,10 +385,27 @@ function App() {
 
         <div className="panel-stack">
           <section className="panel">
-            <h2>Raw context probe</h2>
+            <h2>Raw context probe (same canvas)</h2>
             <div className="probe-list">
               {probeResults.map((result) => (
                 <article key={result.name} className="probe-row">
+                  <div className="probe-header">
+                    <strong>{result.name}</strong>
+                    <span data-success={result.success}>
+                      {result.success ? "ok" : "failed"}
+                    </span>
+                  </div>
+                  <p>{result.details}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Raw context probe (fresh canvas per mode)</h2>
+            <div className="probe-list">
+              {freshProbeResults.map((result) => (
+                <article key={`fresh-${result.name}`} className="probe-row">
                   <div className="probe-header">
                     <strong>{result.name}</strong>
                     <span data-success={result.success}>
