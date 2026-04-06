@@ -114,6 +114,15 @@ function getWebGLContext(
     | null;
 }
 
+function releaseContext(context: WebGLRenderingContext | WebGL2RenderingContext) {
+  try {
+    const loseContextExtension = context.getExtension("WEBGL_lose_context");
+    loseContextExtension?.loseContext();
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -146,7 +155,16 @@ function App() {
     resizeCleanupRef.current?.();
     resizeCleanupRef.current = null;
 
-    rendererRef.current?.dispose();
+    if (rendererRef.current) {
+      try {
+        rendererRef.current.forceContextLoss();
+      } catch {
+        // Best-effort cleanup only.
+      }
+
+      rendererRef.current.dispose();
+    }
+
     rendererRef.current = null;
   };
 
@@ -182,6 +200,7 @@ function App() {
             details: formatProbeDetails(context),
           });
           pushLog("info", `${contextName} probe succeeded`);
+          releaseContext(context);
         } else {
           nextProbeResults.push({
             name: contextName,
@@ -218,6 +237,7 @@ function App() {
             details: `${formatProbeDetails(context)} | ${exerciseContext(context)}`,
           });
           pushLog("info", `${contextName} fresh-canvas probe succeeded`);
+          releaseContext(context);
         } else {
           nextFreshProbeResults.push({
             name: contextName,
